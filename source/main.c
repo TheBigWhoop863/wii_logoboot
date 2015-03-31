@@ -53,6 +53,7 @@ int main(int argc, char **argv)
 
 
 //-------------------------------------------------------------------------------------
+	
 	/*
 	printf("Accessing NAND via IPC/IOS call...");
 	if( !SYSTEMHL_readStateFlags() )

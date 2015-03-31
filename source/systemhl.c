@@ -198,6 +198,15 @@ s32 SYSTEMHL_readStateFlags()
 	return 0;
 }
 
+
+/* Different philosophies:
+* IOS_ calls access the IOS API and the InterProcess Communication subsystem (IPC)
+* This is the "official" Nintendo way, similar to what official applications do
+* as all the I/O is controlled by the IOS.
+*
+* ISFS, on the other hand, bypasses IOS APIs in favor of direct(?) hardware access
+* (I do not know if it is real direct hw access or IOS is only partly bypassed)
+*/
 s32 SYSTEMHL_ReadStateViaISFS()
 {
 	// Quick retcodes compendium (to be rewritten! Debug only!!)
