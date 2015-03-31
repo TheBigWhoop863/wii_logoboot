@@ -217,6 +217,8 @@ s32 SYSTEMHL_ReadStateViaISFS()
 	int fd;
 	int ret;
 	
+	memset(&stateflags,0xBB,sizeof(stateflags)); // TODO: Remove
+
 	if (ISFS_Initialize() != IPC_OK) 
 	{
 		ISFS_Deinitialize();
@@ -225,7 +227,7 @@ s32 SYSTEMHL_ReadStateViaISFS()
 	
 	fd = ISFS_Open(__stateflags,ISFS_OPEN_READ);
 	if(fd < 0) {
-		memset(&stateflags,0,sizeof(stateflags));
+		//memset(&stateflags,0,sizeof(stateflags));
 		//return WII_EINTERNAL;
 		return 2;
 	}
@@ -233,12 +235,12 @@ s32 SYSTEMHL_ReadStateViaISFS()
 	ret = ISFS_Read(fd, &stateflags, sizeof(stateflags));
 	ISFS_Close(fd);
 	if(ret != sizeof(stateflags)) {
-		memset(&stateflags,0,sizeof(stateflags));
+		//memset(&stateflags,0,sizeof(stateflags));
 		//return WII_EINTERNAL;
 		return 3;
 	}
 	if(!__ValidChecksum(&stateflags, sizeof(stateflags))) {
-		memset(&stateflags,0,sizeof(stateflags));
+		//memset(&stateflags,0,sizeof(stateflags));
 		return WII_ECHECKSUM;
 	}
 	
@@ -255,17 +257,28 @@ s32 SYSTEMHL_checkDVD()
 	DVD_Init();
 	#ifdef _DEBUG
 		if(__SYSTEMHL_init)
-			printf('\n   Init OK!..');
+			printf("\nDVD_Init() OK!..");
+	#endif
+	
+	DVD_Reset(0);
+	#ifdef _DEBUG
+		if(__SYSTEMHL_init)
+			printf("\nDVD_Reset(0) OK!..");
 	#endif
 	
 	driveinfo.drive_status_a = DVD_GetDriveStatus(); // Before mount
 	#ifdef _DEBUG
 		if(__SYSTEMHL_init)
-			printf('\n   GetDriveStatus OK!..');
+			printf("\nDVD_GetDriveStatus OK!.. Status is: %d",driveinfo.drive_status_a);
 	#endif
 	
 	if( DVD_Mount() )
 	{
+		#ifdef _DEBUG
+			if(__SYSTEMHL_init)
+				printf("\nDVD_Mount()..OK!");
+		#endif
+		
 		dvddiskid *currDisk = DVD_GetCurrentDiskID();
 		// Copy arrays
 		for( i=0;i<4;i++)
@@ -274,9 +287,9 @@ s32 SYSTEMHL_checkDVD()
 			driveinfo.company[i] = currDisk->company[i];
 		driveinfo.drive_status_b = DVD_GetDriveStatus(); // After mount
 	}
-	DVD_Reset(0);
+	//DVD_Reset(0); // Full drive reset, reloads stock firmware
 		
-		
+	DVD_Reset(1); // Softer reset (but not "soft" reset)
 	return 0;
 }
 

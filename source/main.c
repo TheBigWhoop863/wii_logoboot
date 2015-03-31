@@ -38,7 +38,7 @@ int main(int argc, char **argv)
 	printf("  Flag HW_AHBPROT is:  ");
 	
 	if (*(vu32*)0xcd800064 == 0xFFFFFFFF) // Is HW_AHBPROT set? See iospatch.c
-		printf("SET!!\n");
+		printf("SET!!");
 	else
 		printf("not set.");
 	
@@ -133,7 +133,7 @@ int main(int argc, char **argv)
 * Jacopo Viti - Mar.2015
 ***************************************************/
 
-	/*
+	
 	printf("Now reading disc info from DVD drive...");
 	if( !SYSTEMHL_checkDVD() )
 	{
@@ -150,7 +150,7 @@ int main(int argc, char **argv)
 		}
 		printf("\n");
 	}
-	*/
+	
 //-------------------------------------------------------------------------------------
 
 	printf("Press A to return to loader..\n");

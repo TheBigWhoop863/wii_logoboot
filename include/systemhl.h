@@ -1,6 +1,8 @@
 #ifndef _SYSTEM_H
 #define _SYSTEM_H
 
+#define _DEBUG
+
 typedef struct {
 	u32 checksum;
 	u8 flags;
