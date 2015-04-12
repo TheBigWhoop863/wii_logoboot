@@ -33,23 +33,25 @@ int main(int argc, char **argv)
 	printf("Init Complete! Hello, World!\n\n");
 	VIDEO_WaitVSync();
 	
-	IOSInfo *inf = SYSTEMHL_QueryIOS();
+	IOSInfo *inf = SYSTEMHL_queryIOS();
 	printf("  Using IOS: %d v.%d\n",inf->ver,inf->rev);
 	printf("  Flag HW_AHBPROT is:  ");
 	
-	if (*(vu32*)0xcd800064 == 0xFFFFFFFF) // Is HW_AHBPROT set? See iospatch.c
+	if (HAVE_AHBPROT) // Is HW_AHBPROT set? See iospatch.c
 		printf("SET!!");
 	else
 		printf("not set.");
-	
 	printf("\n\n");
+
+
+/*
 	printf("Now patching in-mem IOS..");
 	u32 retcount= IOSPATCH_Apply();
 	if(retcount) 
 		printf("OK!! (%d)\n\n",retcount);
 	else
 		printf("ERR! :(\n\n");
-	
+*/	
 
 
 //-------------------------------------------------------------------------------------
@@ -68,7 +70,7 @@ int main(int argc, char **argv)
 	*/
 	
 	printf("Accessing NAND via ISFS call...");
-	isfs_ret = SYSTEMHL_ReadStateViaISFS();
+	isfs_ret = SYSTEMHL_readStateViaISFS();
 	switch(isfs_ret)
 	{
 	case 0:
@@ -132,8 +134,8 @@ int main(int argc, char **argv)
 * STATUS: 2015-03-20 freezes probably on DVD_Mount()
 * Jacopo Viti - Mar.2015
 ***************************************************/
-
-	
+// Test A: libOGC / DVD
+/*	
 	printf("Now reading disc info from DVD drive...");
 	if( !SYSTEMHL_checkDVD() )
 	{
@@ -150,6 +152,56 @@ int main(int argc, char **argv)
 		}
 		printf("\n");
 	}
+*/
+
+//Test B: libdi / DI
+	int i;
+	printf("Now reading disc info from DVD drive (libdi)...");
+	s32 retcode = SYSTEMHL_checkDVDViaDI();
+	if( !retcode )
+	{
+		printf("OK!\n");
+		const DISC_HEADER *header = (DISC_HEADER *)getDataBuf();
+		printf("Data Read From Disc Header: \n");
+			printf(" --> Disc ID    : %c\n", (char)header->disc_id);
+			printf(" --> Game Code  : ");
+				for(i=0;i<2;i++)
+				{	
+					printf("%c",(char)header->game_code[i]);
+				}
+				printf("\n");
+			printf(" --> Region Code: %c\n",(char)header->region_code);	
+			printf(" --> Maker Code : ");
+				for(i=0;i<2;i++)
+				{	
+					printf("%c",header->maker_code[i]);
+				}
+				printf("\n");
+			printf(" --> Disc Nr    : %d\n",header->disc_nr);
+			printf(" --> Disc Ver   : %d\n",header->disc_version);
+			printf(" --> Audio Strm : %d\n",header->audio_streaming);
+			printf(" --> Strm BufSz : %d\n",header->streaming_buffer_size);
+			printf(" --> Magic Word : 0x");
+				for(i=0;i<4;i++)
+				{
+					printf("%x",header->magic_wii[i]);
+				}
+				printf(" | 0x");
+				for(i=0;i<4;i++)
+				{
+					printf("%x",header->magic_gc[i]);
+				}
+				printf("  ");
+				if( !memcmp(header->magic_wii, MAGIC_WII, 4) )
+					printf("(WII)");
+				if( !memcmp(header->magic_gc, MAGIC_GC, 4) )
+					printf("(GameCube)");
+				printf("\n");
+			printf(" --> Game Title: %s\n",(char *)&header->title); //CAREFUL! May not have a terminator...
+		
+	}
+	else
+		printf("Error: %d\n",retcode);
 	
 //-------------------------------------------------------------------------------------
 

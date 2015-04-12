@@ -7,17 +7,21 @@
 
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <gccore.h>
-#include <string.h>
-#include <malloc.h>	
+#include <string.h>	
 #include <wiiuse/wpad.h>
-#include <ogc/es.h>
+//#include <ogc/es.h>
+#include <di/di.h>
 #include <ogc/isfs.h>
 #include <ogc/ipc.h>
 #include <ogc/ios.h>
 #include <ogc/dvd.h>
 #include <ogc/wiilaunch.h>
+#include <sys/unistd.h>
+
+//#include <ogcsys.h>
+//#include <ogc/lwp_watchdog.h>
+//#include <stdlib.h>
 
 #include "systemhl.h"
 
@@ -31,7 +35,18 @@ static void *xfb = NULL;
 static GXRModeObj *rmode = NULL;
 
 static u32 __SYSTEMHL_init = 0;
+static bool dvdDriveReady = false;
 
+static u8 read_buffer[BUFFER_SIZE];
+// Debug printf function
+static inline void dbgprint(const char *text)
+{
+	#ifdef _DEBUG
+	if(__SYSTEMHL_init)
+		printf(text);
+	#endif
+	return;
+}
 
 // Hidden functions, copied from wiilaunch.c
 // These are not accessible from outside wiilaunch.c (static), hence copy/paste
@@ -64,6 +79,13 @@ void SYSTEMHL_init()
 {
 	// Init subsystems by calling appropriate init()
 	// Subsystems APIs provided by libOGC
+	
+	// One exception is the DriveInterface API (libdi)
+	// It MUST be called as the very first thing.
+	int statusDIinit = -1;
+	statusDIinit = DI_Init();
+	// WARNING: If a disc is never inserted at this point, program might crash at the end (?). Known libdi bug.
+	
 	VIDEO_Init();
 	AUDIO_Init(NULL);
 	
@@ -98,6 +120,10 @@ void SYSTEMHL_init()
 	// Wait for Video setup to complete
 	VIDEO_WaitVSync();
 	if(rmode->viTVMode&VI_NON_INTERLACE) VIDEO_WaitVSync();
+	
+	if(statusDIinit!=0)
+		dbgprint("WARNING: There probably was a problem while performing DI_Init()\n");
+		
 	
 	__SYSTEMHL_init=1;
 }
@@ -204,10 +230,10 @@ s32 SYSTEMHL_readStateFlags()
 * This is the "official" Nintendo way, similar to what official applications do
 * as all the I/O is controlled by the IOS.
 *
-* ISFS, on the other hand, bypasses IOS APIs in favor of direct(?) hardware access
+* ISFS, on the other hand, bypasses(?) IOS APIs in favor of direct hardware access
 * (I do not know if it is real direct hw access or IOS is only partly bypassed)
 */
-s32 SYSTEMHL_ReadStateViaISFS()
+s32 SYSTEMHL_readStateViaISFS()
 {
 	// Quick retcodes compendium (to be rewritten! Debug only!!)
 	// 1: cannot Init
@@ -255,29 +281,17 @@ s32 SYSTEMHL_checkDVD()
 	memset(&driveinfo,0,sizeof(driveinfo));
 	
 	DVD_Init();
-	#ifdef _DEBUG
-		if(__SYSTEMHL_init)
-			printf("\nDVD_Init() OK!..");
-	#endif
+		dbgprint("\nDVD_Init() OK!..");
 	
 	DVD_Reset(0);
-	#ifdef _DEBUG
-		if(__SYSTEMHL_init)
-			printf("\nDVD_Reset(0) OK!..");
-	#endif
+		dbgprint("\nDVD_Reset(0) OK!..");
 	
 	driveinfo.drive_status_a = DVD_GetDriveStatus(); // Before mount
-	#ifdef _DEBUG
-		if(__SYSTEMHL_init)
-			printf("\nDVD_GetDriveStatus OK!.. Status is: %d",driveinfo.drive_status_a);
-	#endif
+		dbgprint("\nDVD_GetDriveStatus OK!..");
 	
 	if( DVD_Mount() )
 	{
-		#ifdef _DEBUG
-			if(__SYSTEMHL_init)
-				printf("\nDVD_Mount()..OK!");
-		#endif
+			dbgprint("\nDVD_Mount()..OK!");
 		
 		dvddiskid *currDisk = DVD_GetCurrentDiskID();
 		// Copy arrays
@@ -302,7 +316,7 @@ DvdDriveInfo *SYSTEMHL_getDVDInfo()
 	return &driveinfo;
 }
 
-IOSInfo *SYSTEMHL_QueryIOS()
+IOSInfo *SYSTEMHL_queryIOS()
 {
 	memset(&iosinfo,0,sizeof(iosinfo));
 	iosinfo.ver = IOS_GetVersion();
@@ -310,7 +324,7 @@ IOSInfo *SYSTEMHL_QueryIOS()
 	return &iosinfo;
 }
 
-s32 SYSTEMHL_TestNandAccess(u32 *buf,u32 size)
+s32 SYSTEMHL_testNandAccess(u32 *buf,u32 size)
 {
 	//u32 buf[512]; // Data buffer , 2K size
 	
@@ -389,7 +403,7 @@ s32 SYSTEMHL_TestNandAccess(u32 *buf,u32 size)
 	
 	printf("OK!\n");
 	
-	printf("Finishing SYSTEMHL_TestNandAccess()..");
+	printf("Finishing SYSTEMHL_testNandAccess()..");
 		SYSTEMHL_waitForButtonAPress();
 		
 	ISFS_Close(fd);
@@ -402,6 +416,57 @@ s32 SYSTEMHL_TestNandAccess(u32 *buf,u32 size)
 	
 	printf("OK!\n");
 	return 0;
+}
+
+/* s32 SYSTEMHL_checkDVDViaDI()
+* 
+* Uses the DriveInterface (libdi) functions to access and issue commands to DVD Drive
+* See if those work better than DVD functions, which don't seem to be able to access the drive
+*/
+
+ u32 SYSTEMHL_initDisc()
+{
+	u32 query_attempts = 0;
+	DI_Mount();
+	while (DI_GetStatus() & (DVD_INIT | DVD_NO_DISC)) 
+	{
+		query_attempts++;
+		if (query_attempts>8)
+			break;
+		else
+			usleep(4000000);
+	}
+	dvdDriveReady = (query_attempts>8) ? false : true;	// Very ugly
+	return 0;
+}
+
+s32 SYSTEMHL_checkDVDViaDI()
+{
+	// As per the README of libdi, DI_Init() MUST be called as the very first thing in my program!
+	// Therefore I am moving the call as the first thing in SYSTEMHL_Init();
+	// DI_Init();
+	//
+	SYSTEMHL_initDisc();
+	if( !dvdDriveReady ) return -1;
+	
+	memset(&read_buffer,0,BUFFER_SIZE);
+	
+	if (DI_ReadDVD(read_buffer, 1, 0)) return -4;
+    DISC_HEADER *header = (DISC_HEADER *)read_buffer;
+	
+	DI_Close();
+	dvdDriveReady = false;
+	DI_Reset();
+	
+    if (memcmp(header->magic_wii, MAGIC_WII, 4) * memcmp(header->magic_gc, MAGIC_GC, 4)) // should be 0 if either one matches
+		return -100; //Err: Invalid Data?
+	
+	return 0;
+}
+
+const u8 *getDataBuf()
+{
+	return &read_buffer;
 }
 ////////////////////////////////////////
 
