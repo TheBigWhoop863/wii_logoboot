@@ -9,21 +9,24 @@
 #include <stdio.h>
 #include <gccore.h>
 #include <string.h>	
-#include <wiiuse/wpad.h>
-//#include <ogc/es.h>
-#include <di/di.h>
+#include <unistd.h>
+
+// Wii stuff
+#include <ogc/es.h>
 #include <ogc/isfs.h>
 #include <ogc/ipc.h>
 #include <ogc/ios.h>
-#include <ogc/dvd.h>
+//#include <ogc/dvd.h>
 #include <ogc/wiilaunch.h>
-#include <sys/unistd.h>
+#include <di/di.h>
+#include <wiiuse/wpad.h>
 
 //#include <ogcsys.h>
 //#include <ogc/lwp_watchdog.h>
 //#include <stdlib.h>
 
 #include "systemhl.h"
+#include "rethandle.h"
 
 static char __stateflags[] ATTRIBUTE_ALIGN(32) = "/title/00000001/00000002/data/state.dat";
 
@@ -128,13 +131,17 @@ void SYSTEMHL_init()
 	__SYSTEMHL_init=1;
 }
 
-void SYSTEMHL_getScreenData(void* fb, GXRModeObj* mode)
+void* SYSTEMHL_getFramebuffer()
 {
-	fb=xfb;
-	mode=rmode;
+	return xfb;
 }
 
-void SYSTEMHL_setScreenData(void* fb, GXRModeObj* mode)
+GXRModeObj* SYSTEMHL_getVideoMode()
+{
+	return rmode;
+}
+
+void SYSTEMHL_setVideo(void* fb, GXRModeObj* mode)
 {
 	xfb=fb;
 	rmode=mode;
@@ -185,7 +192,7 @@ void SYSTEMHL_waitForButtonAPress()
 		  pressedGC |= PAD_ButtonsDown(2);
 		  pressedGC |= PAD_ButtonsDown(3);
 		  
-		A_pressed = (pressed & WPAD_BUTTON_A) | (pressedGC & PAD_BUTTON_A); 
+		A_pressed = (pressed & WPAD_BUTTON_A) | (pressed & WPAD_CLASSIC_BUTTON_A) | (pressedGC & PAD_BUTTON_A); 
 		// Wait for next video frame
 		VIDEO_WaitVSync();
 	}
@@ -194,7 +201,7 @@ void SYSTEMHL_waitForButtonAPress()
 *
 * This replicates a lower level function in wiilaunch (part of libOGC :) )
 * Flags are read from special files in the NAND filesystem
-* and put in static, global specialized structs.
+* and put in a global struct.
 */
 s32 SYSTEMHL_readStateFlags()
 {
@@ -226,13 +233,18 @@ s32 SYSTEMHL_readStateFlags()
 
 
 /* Different philosophies:
-* IOS_ calls access the IOS API and the InterProcess Communication subsystem (IPC)
-* This is the "official" Nintendo way, similar to what official applications do
-* as all the I/O is controlled by the IOS.
+* IOS_Open is a call to the IOS to get a specific system resource.
+* Call is notified to IOS using using IPC (InterProcess Communication);
+* this is the official, correct way to do stuff. IOS restrictions may apply.
 *
-* ISFS, on the other hand, bypasses(?) IOS APIs in favor of direct hardware access
-* (I do not know if it is real direct hw access or IOS is only partly bypassed)
+* IOS_Open works for different resources: can be a file on NAND, can be a device (/dev), etc.
+* It is possible to use an IOS_Open call to get access to the DVD drive, for example : IOS_Open("/dev/di",...);
+* For this reason, IOS_Read exist, but not IOS_Write (some resources might not be writable).
+* 
+* ISFS calls, on the other hand, still use IPC, but everything is specific to the NAND filesystem.
+* You MUST use ISFS calls (or raw ioctls opcodes :) ) if you need to write to the NAND filesystem.
 */
+/*
 s32 SYSTEMHL_readStateViaISFS()
 {
 	// Quick retcodes compendium (to be rewritten! Debug only!!)
@@ -274,49 +286,18 @@ s32 SYSTEMHL_readStateViaISFS()
 	
 	return 0;
 }
+*/
 
-s32 SYSTEMHL_checkDVD()
-{
-	u32 i;
-	memset(&driveinfo,0,sizeof(driveinfo));
-	
-	DVD_Init();
-		dbgprint("\nDVD_Init() OK!..");
-	
-	DVD_Reset(0);
-		dbgprint("\nDVD_Reset(0) OK!..");
-	
-	driveinfo.drive_status_a = DVD_GetDriveStatus(); // Before mount
-		dbgprint("\nDVD_GetDriveStatus OK!..");
-	
-	if( DVD_Mount() )
-	{
-			dbgprint("\nDVD_Mount()..OK!");
-		
-		dvddiskid *currDisk = DVD_GetCurrentDiskID();
-		// Copy arrays
-		for( i=0;i<4;i++)
-			driveinfo.gamename[i] = currDisk->gamename[i];
-		for( i=0;i<2;i++)
-			driveinfo.company[i] = currDisk->company[i];
-		driveinfo.drive_status_b = DVD_GetDriveStatus(); // After mount
-	}
-	//DVD_Reset(0); // Full drive reset, reloads stock firmware
-		
-	DVD_Reset(1); // Softer reset (but not "soft" reset)
-	return 0;
-}
-
-StateFlags *SYSTEMHL_getStateFlags()
+StateFlags* SYSTEMHL_getStateFlags()
 {
 	return &stateflags;
 }
-DvdDriveInfo *SYSTEMHL_getDVDInfo()
+DvdDriveInfo* SYSTEMHL_getDVDInfo()
 {
 	return &driveinfo;
 }
 
-IOSInfo *SYSTEMHL_queryIOS()
+IOSInfo* SYSTEMHL_queryIOS()
 {
 	memset(&iosinfo,0,sizeof(iosinfo));
 	iosinfo.ver = IOS_GetVersion();
@@ -324,6 +305,7 @@ IOSInfo *SYSTEMHL_queryIOS()
 	return &iosinfo;
 }
 
+/*
 s32 SYSTEMHL_testNandAccess(u32 *buf,u32 size)
 {
 	//u32 buf[512]; // Data buffer , 2K size
@@ -417,12 +399,8 @@ s32 SYSTEMHL_testNandAccess(u32 *buf,u32 size)
 	printf("OK!\n");
 	return 0;
 }
-
-/* s32 SYSTEMHL_checkDVDViaDI()
-* 
-* Uses the DriveInterface (libdi) functions to access and issue commands to DVD Drive
-* See if those work better than DVD functions, which don't seem to be able to access the drive
 */
+
 
  u32 SYSTEMHL_initDisc()
 {
@@ -434,12 +412,17 @@ s32 SYSTEMHL_testNandAccess(u32 *buf,u32 size)
 		if (query_attempts>8)
 			break;
 		else
-			usleep(4000000);
+			sleep(2);
 	}
 	dvdDriveReady = (query_attempts>8) ? false : true;	// Very ugly
 	return 0;
 }
 
+/* s32 SYSTEMHL_checkDVDViaDI()
+* 
+* Uses the DriveInterface (libdi) functions to access and issue commands to DVD Drive
+* See if those work better than DVD functions, which don't seem to be able to access the drive
+*/
 s32 SYSTEMHL_checkDVDViaDI()
 {
 	// As per the README of libdi, DI_Init() MUST be called as the very first thing in my program!
@@ -464,9 +447,9 @@ s32 SYSTEMHL_checkDVDViaDI()
 	return 0;
 }
 
-const u8 *getDataBuf()
+const u8* getDataBuf()
 {
-	return &read_buffer;
+	return read_buffer;
 }
 ////////////////////////////////////////
 
