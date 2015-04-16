@@ -21,7 +21,6 @@
 
 #include "systemhl.h"
 #include "rethandle.h"
-//#include "iospatch.h"
 
 
 
@@ -38,7 +37,7 @@ int main(int argc, char **argv)
 	printf("  Using IOS: %d v.%d\n",inf->ver,inf->rev);
 	printf("  Flag HW_AHBPROT is:  ");
 	
-	if (HAVE_AHBPROT) // Is HW_AHBPROT set? See iospatch.c
+	if (HAVE_AHBPROT) // Is HW_AHBPROT set? See systemhl.h, thanks to FTPii project for this useful bit of code!
 		printf("SET!!");
 	else
 		printf("not set.");
