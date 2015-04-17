@@ -7,19 +7,26 @@
 
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <gccore.h>
-#include <string.h>
-#include <malloc.h>	
-#include <wiiuse/wpad.h>
+#include <string.h>	
+#include <unistd.h>
+
+// Wii stuff
 #include <ogc/es.h>
 #include <ogc/isfs.h>
 #include <ogc/ipc.h>
 #include <ogc/ios.h>
-#include <ogc/dvd.h>
+//#include <ogc/dvd.h>
 #include <ogc/wiilaunch.h>
+#include <di/di.h>
+#include <wiiuse/wpad.h>
+
+//#include <ogcsys.h>
+//#include <ogc/lwp_watchdog.h>
+//#include <stdlib.h>
 
 #include "systemhl.h"
+#include "rethandle.h"
 
 static char __stateflags[] ATTRIBUTE_ALIGN(32) = "/title/00000001/00000002/data/state.dat";
 
@@ -31,7 +38,18 @@ static void *xfb = NULL;
 static GXRModeObj *rmode = NULL;
 
 static u32 __SYSTEMHL_init = 0;
+static bool dvdDriveReady = false;
 
+static u8 read_buffer[BUFFER_SIZE];
+// Debug printf function
+static inline void dbgprint(const char *text)
+{
+	#ifdef _DEBUG
+	if(__SYSTEMHL_init)
+		printf(text);
+	#endif
+	return;
+}
 
 // Hidden functions, copied from wiilaunch.c
 // These are not accessible from outside wiilaunch.c (static), hence copy/paste
@@ -64,6 +82,13 @@ void SYSTEMHL_init()
 {
 	// Init subsystems by calling appropriate init()
 	// Subsystems APIs provided by libOGC
+	
+	// One exception is the DriveInterface API (libdi)
+	// It MUST be called as the very first thing.
+	int statusDIinit = -1;
+	statusDIinit = DI_Init();
+	// WARNING: If a disc is never inserted at this point, program might crash at the end (?). Known libdi bug.
+	
 	VIDEO_Init();
 	AUDIO_Init(NULL);
 	
@@ -99,16 +124,24 @@ void SYSTEMHL_init()
 	VIDEO_WaitVSync();
 	if(rmode->viTVMode&VI_NON_INTERLACE) VIDEO_WaitVSync();
 	
+	if(statusDIinit!=0)
+		dbgprint("WARNING: There probably was a problem while performing DI_Init()\n");
+		
+	
 	__SYSTEMHL_init=1;
 }
 
-void SYSTEMHL_getScreenData(void* fb, GXRModeObj* mode)
+void* SYSTEMHL_getFramebuffer()
 {
-	fb=xfb;
-	mode=rmode;
+	return xfb;
 }
 
-void SYSTEMHL_setScreenData(void* fb, GXRModeObj* mode)
+GXRModeObj* SYSTEMHL_getVideoMode()
+{
+	return rmode;
+}
+
+void SYSTEMHL_setVideo(void* fb, GXRModeObj* mode)
 {
 	xfb=fb;
 	rmode=mode;
@@ -159,7 +192,7 @@ void SYSTEMHL_waitForButtonAPress()
 		  pressedGC |= PAD_ButtonsDown(2);
 		  pressedGC |= PAD_ButtonsDown(3);
 		  
-		A_pressed = (pressed & WPAD_BUTTON_A) | (pressedGC & PAD_BUTTON_A); 
+		A_pressed = (pressed & WPAD_BUTTON_A) | (pressed & WPAD_CLASSIC_BUTTON_A) | (pressedGC & PAD_BUTTON_A); 
 		// Wait for next video frame
 		VIDEO_WaitVSync();
 	}
@@ -168,7 +201,7 @@ void SYSTEMHL_waitForButtonAPress()
 *
 * This replicates a lower level function in wiilaunch (part of libOGC :) )
 * Flags are read from special files in the NAND filesystem
-* and put in static, global specialized structs.
+* and put in a global struct.
 */
 s32 SYSTEMHL_readStateFlags()
 {
@@ -200,14 +233,19 @@ s32 SYSTEMHL_readStateFlags()
 
 
 /* Different philosophies:
-* IOS_ calls access the IOS API and the InterProcess Communication subsystem (IPC)
-* This is the "official" Nintendo way, similar to what official applications do
-* as all the I/O is controlled by the IOS.
+* IOS_Open is a call to the IOS to get a specific system resource.
+* Call is notified to IOS using using IPC (InterProcess Communication);
+* this is the official, correct way to do stuff. IOS restrictions may apply.
 *
-* ISFS, on the other hand, bypasses IOS APIs in favor of direct(?) hardware access
-* (I do not know if it is real direct hw access or IOS is only partly bypassed)
+* IOS_Open works for different resources: can be a file on NAND, can be a device (/dev), etc.
+* It is possible to use an IOS_Open call to get access to the DVD drive, for example : IOS_Open("/dev/di",...);
+* For this reason, IOS_Read exist, but not IOS_Write (some resources might not be writable).
+* 
+* ISFS calls, on the other hand, still use IPC, but everything is specific to the NAND filesystem.
+* You MUST use ISFS calls (or raw ioctls opcodes :) ) if you need to write to the NAND filesystem.
 */
-s32 SYSTEMHL_ReadStateViaISFS()
+/*
+s32 SYSTEMHL_readStateViaISFS()
 {
 	// Quick retcodes compendium (to be rewritten! Debug only!!)
 	// 1: cannot Init
@@ -217,6 +255,8 @@ s32 SYSTEMHL_ReadStateViaISFS()
 	int fd;
 	int ret;
 	
+	memset(&stateflags,0xBB,sizeof(stateflags)); // TODO: Remove
+
 	if (ISFS_Initialize() != IPC_OK) 
 	{
 		ISFS_Deinitialize();
@@ -225,7 +265,7 @@ s32 SYSTEMHL_ReadStateViaISFS()
 	
 	fd = ISFS_Open(__stateflags,ISFS_OPEN_READ);
 	if(fd < 0) {
-		memset(&stateflags,0,sizeof(stateflags));
+		//memset(&stateflags,0,sizeof(stateflags));
 		//return WII_EINTERNAL;
 		return 2;
 	}
@@ -233,12 +273,12 @@ s32 SYSTEMHL_ReadStateViaISFS()
 	ret = ISFS_Read(fd, &stateflags, sizeof(stateflags));
 	ISFS_Close(fd);
 	if(ret != sizeof(stateflags)) {
-		memset(&stateflags,0,sizeof(stateflags));
+		//memset(&stateflags,0,sizeof(stateflags));
 		//return WII_EINTERNAL;
 		return 3;
 	}
 	if(!__ValidChecksum(&stateflags, sizeof(stateflags))) {
-		memset(&stateflags,0,sizeof(stateflags));
+		//memset(&stateflags,0,sizeof(stateflags));
 		return WII_ECHECKSUM;
 	}
 	
@@ -246,50 +286,18 @@ s32 SYSTEMHL_ReadStateViaISFS()
 	
 	return 0;
 }
+*/
 
-s32 SYSTEMHL_checkDVD()
-{
-	u32 i;
-	memset(&driveinfo,0,sizeof(driveinfo));
-	
-	DVD_Init();
-	#ifdef _DEBUG
-		if(__SYSTEMHL_init)
-			printf('\n   Init OK!..');
-	#endif
-	
-	driveinfo.drive_status_a = DVD_GetDriveStatus(); // Before mount
-	#ifdef _DEBUG
-		if(__SYSTEMHL_init)
-			printf('\n   GetDriveStatus OK!..');
-	#endif
-	
-	if( DVD_Mount() )
-	{
-		dvddiskid *currDisk = DVD_GetCurrentDiskID();
-		// Copy arrays
-		for( i=0;i<4;i++)
-			driveinfo.gamename[i] = currDisk->gamename[i];
-		for( i=0;i<2;i++)
-			driveinfo.company[i] = currDisk->company[i];
-		driveinfo.drive_status_b = DVD_GetDriveStatus(); // After mount
-	}
-	DVD_Reset(0);
-		
-		
-	return 0;
-}
-
-StateFlags *SYSTEMHL_getStateFlags()
+StateFlags* SYSTEMHL_getStateFlags()
 {
 	return &stateflags;
 }
-DvdDriveInfo *SYSTEMHL_getDVDInfo()
+DvdDriveInfo* SYSTEMHL_getDVDInfo()
 {
 	return &driveinfo;
 }
 
-IOSInfo *SYSTEMHL_QueryIOS()
+IOSInfo* SYSTEMHL_queryIOS()
 {
 	memset(&iosinfo,0,sizeof(iosinfo));
 	iosinfo.ver = IOS_GetVersion();
@@ -297,7 +305,8 @@ IOSInfo *SYSTEMHL_QueryIOS()
 	return &iosinfo;
 }
 
-s32 SYSTEMHL_TestNandAccess(u32 *buf,u32 size)
+/*
+s32 SYSTEMHL_testNandAccess(u32 *buf,u32 size)
 {
 	//u32 buf[512]; // Data buffer , 2K size
 	
@@ -376,7 +385,7 @@ s32 SYSTEMHL_TestNandAccess(u32 *buf,u32 size)
 	
 	printf("OK!\n");
 	
-	printf("Finishing SYSTEMHL_TestNandAccess()..");
+	printf("Finishing SYSTEMHL_testNandAccess()..");
 		SYSTEMHL_waitForButtonAPress();
 		
 	ISFS_Close(fd);
@@ -389,6 +398,58 @@ s32 SYSTEMHL_TestNandAccess(u32 *buf,u32 size)
 	
 	printf("OK!\n");
 	return 0;
+}
+*/
+
+
+ u32 SYSTEMHL_initDisc()
+{
+	u32 query_attempts = 0;
+	DI_Mount();
+	while (DI_GetStatus() & (DVD_INIT | DVD_NO_DISC)) 
+	{
+		query_attempts++;
+		if (query_attempts>8)
+			break;
+		else
+			sleep(2);
+	}
+	dvdDriveReady = (query_attempts>8) ? false : true;	// Very ugly
+	return 0;
+}
+
+/* s32 SYSTEMHL_checkDVDViaDI()
+* 
+* Uses the DriveInterface (libdi) functions to access and issue commands to DVD Drive
+* See if those work better than DVD functions, which don't seem to be able to access the drive
+*/
+s32 SYSTEMHL_checkDVDViaDI()
+{
+	// As per the README of libdi, DI_Init() MUST be called as the very first thing in my program!
+	// Therefore I am moving the call as the first thing in SYSTEMHL_Init();
+	// DI_Init();
+	//
+	SYSTEMHL_initDisc();
+	if( !dvdDriveReady ) return -1;
+	
+	memset(&read_buffer,0,BUFFER_SIZE);
+	
+	if (DI_ReadDVD(read_buffer, 1, 0)) return -4;
+    DISC_HEADER *header = (DISC_HEADER *)read_buffer;
+	
+	DI_Close();
+	dvdDriveReady = false;
+	DI_Reset();
+	
+    if (memcmp(header->magic_wii, MAGIC_WII, 4) * memcmp(header->magic_gc, MAGIC_GC, 4)) // should be 0 if either one matches
+		return -100; //Err: Invalid Data?
+	
+	return 0;
+}
+
+const u8* getDataBuf()
+{
+	return read_buffer;
 }
 ////////////////////////////////////////
 
