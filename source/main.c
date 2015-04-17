@@ -23,12 +23,30 @@
 #include "rethandle.h"
 
 
+//---------------------------------------------------------------------------------
+static void power_cb()
+//---------------------------------------------------------------------------------
+{
+	STM_ShutdownToStandby();
+}
+
+//---------------------------------------------------------------------------------
+static void reset_cb()
+//---------------------------------------------------------------------------------
+{
+	STM_RebootSystem();
+}
 
 //---------------------------------------------
 int main(int argc, char **argv)
 //---------------------------------------------
 {
+	// Set callbacks to the physical "Power" and "Reset" button on the console, so they actually do something.
+	SYS_SetPowerCallback (power_cb);
+    SYS_SetResetCallback (reset_cb);
+	
 	SYSTEMHL_init(); // Init console and controllers
+		
 	printf("\x1b[2;0H");
 	printf("Init Complete! Hello, World!\n\n");
 	VIDEO_WaitVSync();

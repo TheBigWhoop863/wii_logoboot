@@ -47,7 +47,6 @@ void RetvalFail(int badness)
 	int i;
 	WIILIGHT_Init();
 	
-
 	while(1)
 	{
 	WIILIGHT_TurnOff();
@@ -55,9 +54,9 @@ void RetvalFail(int badness)
 	for (i=0;i<badness;i++)
 	{
 		WIILIGHT_Toggle();
-		sleep(1);
+		usleep(500000);   // Half a second
 		WIILIGHT_Toggle();
-		sleep(1);
+		usleep(500000);
 	}
 	
 	WIILIGHT_SetLevel((255/4)*1);
