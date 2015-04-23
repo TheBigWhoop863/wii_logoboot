@@ -77,13 +77,13 @@ int main(int argc, char **argv)
 	
 	
 	printf("Accessing NAND via IPC/IOS call...");
-	if( !SYSTEMHL_readStateFlags() )
+	if( !SYSTEMHL_readSMState() )
 	{
 		printf("OK!\n");
-		StateFlags * sflags = SYSTEMHL_getStateFlags(); 
-		printf(" --> Flags set are: %#02x\n",sflags->flags);
-		printf(" --> Type set is: %d\n", sflags->type);
-		printf(" --> Disc state is: %d\n", sflags->discstate);
+		
+		printf(" --> Flags set are: %#02x\n",state.flags);
+		printf(" --> Type set is: %d\n", state.type);
+		printf(" --> Disc state is: %d\n", state.discstate);
 		printf("\n");
 	}
 	
@@ -128,18 +128,16 @@ int main(int argc, char **argv)
 		printf("OK!\n");
 		const DISC_HEADER *header = (DISC_HEADER *)getDataBuf();
 		printf("Data Read From Disc Header: \n");
-			printf(" --> Disc ID    : %c\n", (char)header->disc_id);
-			printf(" --> Game Code  : ");
-				for(i=0;i<2;i++)
-				{	
-					printf("%c",(char)header->game_code[i]);
-				}
-				printf("\n");
-			printf(" --> Region Code: %c\n",(char)header->region_code);	
+			printf(" --> Disc ID    : %c\n", (char)header->game_code_ext[0]);
+			printf(" --> Full GameID: ");
+				u8 tmp_gamecode[5];
+				memcpy(tmp_gamecode,header->game_code_ext,4);
+				tmp_gamecode[4] = 0; //this makes it safe, so this str is null-terminated.
+				printf("%s\n",(char *)tmp_gamecode);
 			printf(" --> Maker Code : ");
 				for(i=0;i<2;i++)
 				{	
-					printf("%c",header->maker_code[i]);
+					printf("%c",(char)header->maker_code[i]);
 				}
 				printf("\n");
 			printf(" --> Disc Nr    : %d\n",header->disc_nr);
@@ -162,7 +160,12 @@ int main(int argc, char **argv)
 				if( !memcmp(header->magic_gc, MAGIC_GC, 4) )
 					printf("(GameCube)");
 				printf("\n");
-			printf(" --> Game Title: %s\n",(char *)&header->title); //CAREFUL! May not have a terminator...
+			
+			//header->title[63] = 0; // Ensures string is null-terminated.
+			printf(" --> Game Title: %s\n",(char *)header->title);
+			
+			memcpy((u32*)0x8000000,(const u32*)header,sizeof(DISC_HEADER));
+			SYSTEMHL_writeSMState();
 		
 	}
 	else
@@ -170,6 +173,8 @@ int main(int argc, char **argv)
 	
 //-------------------------------------------------------------------------------------
 
+
+	
 	printf("Press A to return to HBC; HOME to return to System Menu.\n");
 	//SYSTEMHL_waitForButtonAPress();
 	

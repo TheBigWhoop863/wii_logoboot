@@ -28,11 +28,11 @@
 #include "systemhl.h"
 #include "rethandle.h"
 
-static char __stateflags[] ATTRIBUTE_ALIGN(32) = "/title/00000001/00000002/data/state.dat";
+static char __statefile[] ATTRIBUTE_ALIGN(32) = "/title/00000001/00000002/data/state.dat";
 
-static StateFlags stateflags ATTRIBUTE_ALIGN(32);
-static DvdDriveInfo driveinfo ATTRIBUTE_ALIGN(32);
+//static DvdDriveInfo driveinfo ATTRIBUTE_ALIGN(32);
 static IOSInfo iosinfo ATTRIBUTE_ALIGN(32);
+StateFlags state ATTRIBUTE_ALIGN(32);
 
 static void *xfb = NULL;
 static GXRModeObj *rmode = NULL;
@@ -65,11 +65,13 @@ static u32 __CalcChecksum(u32 *buf, int len)
 	return sum;
 }
 
+
 static void __SetChecksum(void *buf, int len)
 {
 	u32 *p = (u32*)buf;
 	p[0] = __CalcChecksum(p, len);
 }
+
 
 static int __ValidChecksum(void *buf, int len)
 {
@@ -85,6 +87,7 @@ void SYSTEMHL_init()
 	
 	// One exception is the DriveInterface API (libdi)
 	// It MUST be called as the very first thing.
+	
 	int statusDIinit = -1;
 	statusDIinit = DI_Init();
 	// WARNING: If a disc is never inserted at this point, program might crash at the end (?). Known libdi bug.
@@ -124,11 +127,11 @@ void SYSTEMHL_init()
 	VIDEO_WaitVSync();
 	if(rmode->viTVMode&VI_NON_INTERLACE) VIDEO_WaitVSync();
 	
+	__SYSTEMHL_init=1;
+	
 	if(statusDIinit!=0)
 		dbgprint("WARNING: There probably was a problem while performing DI_Init()\n");
-		
-	
-	__SYSTEMHL_init=1;
+
 }
 
 void* SYSTEMHL_getFramebuffer()
@@ -169,7 +172,7 @@ void SYSTEMHL_ClearScreen()
 void SYSTEMHL_waitForButtonAPress()
 {
 	u16 A_pressed = 0;
-	
+	dbgprint("Press A to continue..");
 	while(!A_pressed)
 	{
 		// Call WPAD_ScanPads, this reads the latest controller states
@@ -197,13 +200,13 @@ void SYSTEMHL_waitForButtonAPress()
 		VIDEO_WaitVSync();
 	}
 }
-/* SYSTEMHL_readStateFlags()
+/* SYSTEMHL_readSMState()
 *
 * This replicates a lower level function in wiilaunch (part of libOGC :) )
 * Flags are read from special files in the NAND filesystem
 * and put in a global struct.
 */
-s32 SYSTEMHL_readStateFlags()
+s32 SYSTEMHL_readSMState()
 {
 	/* This function is copy/pasted from wiilaunch.c (part of libOGC)
 	* It refreshes data in one global struct, which can then be accessed.
@@ -212,25 +215,76 @@ s32 SYSTEMHL_readStateFlags()
 	int fd;
 	int ret;
 
-	fd = IOS_Open(__stateflags,IPC_OPEN_READ);
+	fd = IOS_Open(__statefile,IPC_OPEN_READ);
 	if(fd < 0) {
-		memset(&stateflags,0,sizeof(stateflags));
+		memset(&state,0,sizeof(state));
 		return WII_EINTERNAL;
 	}
 
-	ret = IOS_Read(fd, &stateflags, sizeof(stateflags));
+	ret = IOS_Read(fd, &state, sizeof(state));
 	IOS_Close(fd);
-	if(ret != sizeof(stateflags)) {
-		memset(&stateflags,0,sizeof(stateflags));
+	if(ret != sizeof(state)) {
+		memset(&state,0,sizeof(state));
 		return WII_EINTERNAL;
 	}
-	if(!__ValidChecksum(&stateflags, sizeof(stateflags))) {
-		memset(&stateflags,0,sizeof(stateflags));
+	if(!__ValidChecksum(&state, sizeof(state))) {
+		memset(&state,0,sizeof(state));
 		return WII_ECHECKSUM;
 	}
 	return 0;
 }
 
+s32 SYSTEMHL_writeSMState()
+{
+	const volatile DISC_HEADER* dh = (void*)0x8000000; // Disc data must already be in memory prior to calling this function
+	
+	int fd;
+	int ret;
+	u32 magic,m2;
+	
+	memcpy(&magic,(const void*)dh->magic_wii,4);
+	memcpy(&m2,(const void*)dh->magic_gc,4);
+	magic |= m2;
+	// Fill struct with appropriate data
+	state.returnto = RETURN_TO_MENU;
+	if ( !memcmp(&magic,MAGIC_WII,4) ){
+		dbgprint("\nWill write BS2 state: Autoboot WII Disc.\n");
+		state.type = TYPE_RETURN;
+		state.flags = FLAGS_STARTWIIGAME;
+		state.discstate = DISCSTATE_WII;
+	}
+	else if( !memcmp(&magic,MAGIC_GC,4) ){
+		dbgprint("\nWill write BS2 state: Autoboot GC Disc.\n");
+		state.type = TYPE_RETURN;
+		state.flags = FLAGS_STARTGCGAME;
+		state.discstate = DISCSTATE_GC;
+	}
+	else {
+		dbgprint("\nWill write BS2 state: Eject disc.\n");
+		state.type = TYPE_EJECTDISC;
+		state.flags = FLAGS_FLAG1 | FLAGS_FLAG3 ;
+		state.discstate = DISCSTATE_OPEN;
+	}
+	
+	SYSTEMHL_waitForButtonAPress();
+	
+	__SetChecksum(&state,sizeof(state));
+	if(!__ValidChecksum(&state, sizeof(state))) {
+		memset(&state,0,sizeof(state));
+		return WII_ECHECKSUM;
+	}
+	
+	fd = IOS_Open(__statefile,IPC_OPEN_WRITE);
+	if(fd < 0)
+		return WII_EINTERNAL;
+
+	ret = IOS_Write(fd, &state, sizeof(state));
+	IOS_Close(fd);
+	if(ret != sizeof(state))
+		return WII_EINTERNAL;
+	
+	return 0;
+}
 
 /* Different philosophies:
 * IOS_Open is a call to the IOS to get a specific system resource.
@@ -287,16 +341,18 @@ s32 SYSTEMHL_readStateViaISFS()
 	return 0;
 }
 */
-
+/*
 StateFlags* SYSTEMHL_getStateFlags()
 {
 	return &stateflags;
 }
+*/
+/*
 DvdDriveInfo* SYSTEMHL_getDVDInfo()
 {
 	return &driveinfo;
 }
-
+*/
 IOSInfo* SYSTEMHL_queryIOS()
 {
 	memset(&iosinfo,0,sizeof(iosinfo));

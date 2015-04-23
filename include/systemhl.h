@@ -11,6 +11,8 @@
 #define MAGIC_WII "\x5d\x1c\x9e\xa3" //0x5D1C9EA3
 #define MAGIC_GC  "\xc2\x33\x9f\x3d" //0xC2339F3D
 
+#include "BS2State.h"
+/*
 typedef struct {
 	u32 checksum;
 	u8 flags;
@@ -19,13 +21,7 @@ typedef struct {
 	u8 returnto;
 	u32 unknown[6];
 } StateFlags;
-
-typedef struct {
-	s8 gamename[4];
-	s8 company[2];
-	s32 drive_status_a;
-	s32 drive_status_b;
-} DvdDriveInfo;
+*/
 
 typedef struct {
 	s32 ver;
@@ -34,9 +30,10 @@ typedef struct {
 
 
 typedef struct {
-    u8 disc_id;
-    u8 game_code[2];
-    u8 region_code;
+//    u8 disc_id;
+//    u8 game_code[2];
+//    u8 region_code;
+	u8 game_code_ext[4];
     u8 maker_code[2];
     u8 disc_nr;
     u8 disc_version;
@@ -50,7 +47,8 @@ typedef struct {
     u8 disable_encryption;
 } __attribute__((packed)) DISC_HEADER;
 
-
+/* Global variables */
+extern StateFlags state;
 
 void* SYSTEMHL_getFramebuffer(void);
 GXRModeObj* SYSTEMHL_getVideoMode(void);
@@ -59,8 +57,9 @@ void SYSTEMHL_init(void);
 void SYSTEMHL_ClearScreen(void);
 
 //s32 SYSTEMHL_readStateViaISFS(void);
-StateFlags* SYSTEMHL_getStateFlags(void);
-s32 SYSTEMHL_readStateFlags(void);
+//StateFlags* SYSTEMHL_getStateFlags(void);
+s32 SYSTEMHL_readSMState(void);
+s32 SYSTEMHL_writeSMState(void);
 
 void SYSTEMHL_waitForButtonAPress(void);
 
