@@ -7,9 +7,14 @@
 
 
 #include <stdio.h>
-#include <gccore.h>
+#include <stdlib.h>
 #include <string.h>	
-#include <unistd.h>
+#include <sys/unistd.h>
+
+#include <fat.h>
+#include <sys/dirent.h>
+
+#include <gccore.h>
 
 // Wii stuff
 #include <ogc/es.h>
@@ -23,7 +28,6 @@
 
 //#include <ogcsys.h>
 //#include <ogc/lwp_watchdog.h>
-//#include <stdlib.h>
 
 #include "systemhl.h"
 #include "rethandle.h"
@@ -236,24 +240,22 @@ s32 SYSTEMHL_readSMState()
 
 s32 SYSTEMHL_writeSMState()
 {
-	const volatile DISC_HEADER* dh = (void*)0x8000000; // Disc data must already be in memory prior to calling this function
+	const volatile DISC_HEADER* dh = (void*)INMEM_DVD_BI2; // Disc data must already be in memory prior to calling this function
 	
 	int fd;
 	int ret;
-	u32 magic,m2;
-	
-	memcpy(&magic,(const void*)dh->magic_wii,4);
-	memcpy(&m2,(const void*)dh->magic_gc,4);
-	magic |= m2;
+	u32 magic = 0;
+	magic |= dh->magic_wii;
+	magic |= dh->magic_gc;
 	// Fill struct with appropriate data
 	state.returnto = RETURN_TO_MENU;
-	if ( !memcmp(&magic,MAGIC_WII,4) ){
+	if ( magic == MAGIC_WII ){
 		dbgprint("\nWill write BS2 state: Autoboot WII Disc.\n");
 		state.type = TYPE_RETURN;
 		state.flags = FLAGS_STARTWIIGAME;
 		state.discstate = DISCSTATE_WII;
 	}
-	else if( !memcmp(&magic,MAGIC_GC,4) ){
+	else if( magic == MAGIC_GC ){
 		dbgprint("\nWill write BS2 state: Autoboot GC Disc.\n");
 		state.type = TYPE_RETURN;
 		state.flags = FLAGS_STARTGCGAME;
@@ -274,15 +276,19 @@ s32 SYSTEMHL_writeSMState()
 		return WII_ECHECKSUM;
 	}
 	
-	fd = IOS_Open(__statefile,IPC_OPEN_WRITE);
+	fd = IOS_Open(__statefile,IPC_OPEN_RW);
 	if(fd < 0)
 		return WII_EINTERNAL;
+	
+	dbgprint("Opened file..");
+	SYSTEMHL_waitForButtonAPress();	
 
 	ret = IOS_Write(fd, &state, sizeof(state));
 	IOS_Close(fd);
 	if(ret != sizeof(state))
 		return WII_EINTERNAL;
 	
+	dbgprint("Write OK..");
 	return 0;
 }
 
@@ -497,15 +503,50 @@ s32 SYSTEMHL_checkDVDViaDI()
 	dvdDriveReady = false;
 	DI_Reset();
 	
-    if (memcmp(header->magic_wii, MAGIC_WII, 4) * memcmp(header->magic_gc, MAGIC_GC, 4)) // should be 0 if either one matches
+    if ( ( header->magic_wii == MAGIC_WII ) || ( header->magic_gc == MAGIC_GC ) ) // There should always be at least one match for a legit game disc
+	{
+		header->title[63] = '\0'; // Enforces string termination
+		return 0;
+	}
+	else
 		return -100; //Err: Invalid Data?
-	
-	return 0;
 }
 
 const u8* getDataBuf()
 {
 	return read_buffer;
+}
+
+s32 SYSTEMHL_dumpMemToSDFile(void)
+{
+	if(!fatInitDefault())
+	{
+		dbgprint("Cannot initialize SD Card !!\n");
+		fatUnmount(0);
+		return -1;
+	}
+	DIR *root = opendir("sd:/");
+	if(!root)
+	{
+		dbgprint("Cannot OPEN SD Card !!\n");
+		fatUnmount(0);
+		return -1;
+	}
+	closedir(root);
+	
+	FILE *fp = fopen("sd:/memdump.bin","wb");
+	if (fp == NULL)
+	{
+		dbgprint("Cannot open file for writing.\n");
+		fatUnmount(0);
+		return -1;
+	}
+	
+	fwrite((const void*)0x80000000,1,6144,fp);
+	fclose(fp);
+	
+	fatUnmount(0);
+	return 0;
 }
 ////////////////////////////////////////
 

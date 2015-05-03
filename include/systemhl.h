@@ -8,8 +8,11 @@
 #define BUFFER_SIZE 0x8000
 
 // Source: http://www.wiibrew.org/wiki/Wii_Disc
-#define MAGIC_WII "\x5d\x1c\x9e\xa3" //0x5D1C9EA3
-#define MAGIC_GC  "\xc2\x33\x9f\x3d" //0xC2339F3D
+#define MAGIC_WII 0x5D1C9EA3 //"\x5d\x1c\x9e\xa3" 
+#define MAGIC_GC  0xC2339F3D //"\xc2\x33\x9f\x3d"
+
+// Source: YAGCD, Chap. 4.2.1.4
+#define INMEM_DVD_BI2 0x800000f4 //In memory location of disk header, when loaded by IPL
 
 #include "BS2State.h"
 /*
@@ -40,11 +43,12 @@ typedef struct {
     u8 audio_streaming;
     u8 streaming_buffer_size;
     u8 unused[14];
-    u8 magic_wii[4];
-    u8 magic_gc[4];
+    u32 magic_wii;
+    u32 magic_gc;
     u8 title[64];
     u8 disable_hashes;
     u8 disable_encryption;
+	u8 padding[30];
 } __attribute__((packed)) DISC_HEADER;
 
 /* Global variables */
@@ -67,5 +71,7 @@ s32 SYSTEMHL_checkDVDViaDI(void);
 IOSInfo * SYSTEMHL_queryIOS(void);
 u32 SYSTEMHL_initDisc(void);
 const u8 *getDataBuf(void);
+
+s32 SYSTEMHL_dumpMemToSDFile(void);
 #endif //_SYSTEM_H
 

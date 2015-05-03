@@ -6,17 +6,7 @@
 #include <ctype.h>
 #include <unistd.h>
 #include <string.h>
-/*
-#include <malloc.h>
-#include <ogc/es.h>
-#include <ogc/isfs.h>
-#include <ogc/ipc.h>
-#include <ogc/ios.h>
-#include <ogc/dvd.h>
-#include <ogc/wiilaunch.h>
-#include <gcmodplay.h>
-*/	
-#include <fat.h>
+
 #include <wiiuse/wpad.h>
 
 #include "systemhl.h"
@@ -48,11 +38,9 @@ int main(int argc, char **argv)
 	SYSTEMHL_init(); // Init console and controllers
 		
 	printf("\x1b[2;0H");
-	printf("Init Complete! Hello, World!\n\n");
-	VIDEO_WaitVSync();
 	
 	IOSInfo *inf = SYSTEMHL_queryIOS();
-	printf("  Using IOS: %d v.%d\n",inf->ver,inf->rev);
+	printf("  Using IOS %d (Rev. %d)\n",inf->ver,inf->rev);
 	printf("  Flag HW_AHBPROT is:  ");
 	
 	if (HAVE_AHBPROT) // Is HW_AHBPROT set? See systemhl.h, thanks to FTPii project for this useful bit of code!
@@ -61,20 +49,7 @@ int main(int argc, char **argv)
 		printf("not set.");
 	printf("\n\n");
 
-
-// Not necessary if I have HW_AHBPROT. If I DON'T have HW_AHBPROT, patching will fail anyway.
-/*
-	printf("Now patching in-mem IOS..");
-	u32 retcount= IOSPATCH_Apply();
-	if(retcount) 
-		printf("OK!! (%d)\n\n",retcount);
-	else
-		printf("ERR! :(\n\n");
-*/	
-
-
 //-------------------------------------------------------------------------------------
-	
 	
 	printf("Accessing NAND via IPC/IOS call...");
 	if( !SYSTEMHL_readSMState() )
@@ -120,53 +95,31 @@ int main(int argc, char **argv)
 * STATUS: 2015-04-11 libdi works!
 * Jacopo Viti - Mar.2015
 ***************************************************/
-	int i;
+	const DISC_HEADER *header = (DISC_HEADER *)getDataBuf();
 	printf("Now reading disc info from DVD drive (libdi)...");
 	s32 retcode = SYSTEMHL_checkDVDViaDI();
 	if( !retcode )
 	{
 		printf("OK!\n");
-		const DISC_HEADER *header = (DISC_HEADER *)getDataBuf();
 		printf("Data Read From Disc Header: \n");
-			printf(" --> Disc ID    : %c\n", (char)header->game_code_ext[0]);
-			printf(" --> Full GameID: ");
-				u8 tmp_gamecode[5];
-				memcpy(tmp_gamecode,header->game_code_ext,4);
-				tmp_gamecode[4] = 0; //this makes it safe, so this str is null-terminated.
-				printf("%s\n",(char *)tmp_gamecode);
-			printf(" --> Maker Code : ");
-				for(i=0;i<2;i++)
-				{	
-					printf("%c",(char)header->maker_code[i]);
-				}
-				printf("\n");
+			printf(" --> Disc ID    : %c %c%c %c\n", (char)header->game_code_ext[0],(char)header->game_code_ext[1],(char)header->game_code_ext[2],(char)header->game_code_ext[3]);
+			printf(" --> Maker Code : %c%c\n", (char)header->maker_code[0], (char)header->maker_code[1]);
 			printf(" --> Disc Nr    : %d\n",header->disc_nr);
 			printf(" --> Disc Ver   : %d\n",header->disc_version);
 			printf(" --> Audio Strm : %d\n",header->audio_streaming);
 			printf(" --> Strm BufSz : %d\n",header->streaming_buffer_size);
-			printf(" --> Magic Word : 0x");
-				for(i=0;i<4;i++)
-				{
-					printf("%x",header->magic_wii[i]);
-				}
-				printf(" | 0x");
-				for(i=0;i<4;i++)
-				{
-					printf("%x",header->magic_gc[i]);
-				}
-				printf("  ");
-				if( !memcmp(header->magic_wii, MAGIC_WII, 4) )
-					printf("(WII)");
-				if( !memcmp(header->magic_gc, MAGIC_GC, 4) )
-					printf("(GameCube)");
+			
+				u32 magic = 0;
+				magic |= header->magic_wii;
+				magic |= header->magic_gc;
+			printf(" --> Magic Word : %08X", magic);
+				if( magic == (u32)MAGIC_WII )
+					printf("   (WII)");
+				if( magic == (u32)MAGIC_GC )
+					printf("   (GameCube)");
 				printf("\n");
 			
-			//header->title[63] = 0; // Ensures string is null-terminated.
-			printf(" --> Game Title: %s\n",(char *)header->title);
-			
-			memcpy((u32*)0x8000000,(const u32*)header,sizeof(DISC_HEADER));
-			SYSTEMHL_writeSMState();
-		
+			printf(" --> Game Title: %s\n",(char *)header->title);		
 	}
 	else
 		printf("Error: %d\n",retcode);
@@ -174,7 +127,40 @@ int main(int argc, char **argv)
 //-------------------------------------------------------------------------------------
 
 
+	printf("Press A to proceed with next tests...\n");
+	SYSTEMHL_waitForButtonAPress();
 	
+	SYSTEMHL_ClearScreen();
+	
+	if(!SYSTEMHL_dumpMemToSDFile())
+		printf("Succeeded dumping memory to SD file. Analyse it! ;-)\n");
+	else
+		printf("Failed dumping memory to SD file.. :-(\n");
+	
+	printf("\n");
+	
+	printf("Will now copy header into special memory location..");
+	SYSTEMHL_waitForButtonAPress();
+	memcpy((u32*)INMEM_DVD_BI2,(const u32*)header,sizeof(DISC_HEADER));
+	
+	printf("\nWill attempt to write state.dol. ");
+	SYSTEMHL_waitForButtonAPress();
+	
+	if( !SYSTEMHL_writeSMState() )
+	{
+		printf("\nSuccessfully updated state.dat!\n");
+		if( !SYSTEMHL_readSMState() )
+		{
+			printf(" --> Flags set are: %#02x\n",state.flags);
+			printf(" --> Type set is: %d\n", state.type);
+			printf(" --> Disc state is: %d\n", state.discstate);
+			printf("\n");
+		}
+	}
+			
+			
+			
+			
 	printf("Press A to return to HBC; HOME to return to System Menu.\n");
 	//SYSTEMHL_waitForButtonAPress();
 	
