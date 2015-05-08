@@ -1,6 +1,6 @@
 /*  SYSTEMHL.C
 *  This is a collection of high-level functions handling most of the
-*  lower level library calls (libOGC, DVD, WiiLight, etc.)
+*  lower level library calls (libOGC, libDI, libWiiLight, etc.)
 *
 *  Jacopo - 11/03/2015
 */
@@ -31,8 +31,10 @@
 
 #include "systemhl.h"
 #include "rethandle.h"
+#include "disc.h"
 
 static char __statefile[] ATTRIBUTE_ALIGN(32) = "/title/00000001/00000002/data/state.dat";
+static tikview gcviews ATTRIBUTE_ALIGN(32);
 
 //static DvdDriveInfo driveinfo ATTRIBUTE_ALIGN(32);
 static IOSInfo iosinfo ATTRIBUTE_ALIGN(32);
@@ -240,7 +242,7 @@ s32 SYSTEMHL_readSMState()
 
 s32 SYSTEMHL_writeSMState()
 {
-	const volatile DISC_HEADER* dh = (void*)INMEM_DVD_BI2; // Disc data must already be in memory prior to calling this function
+	const volatile discheader_ext* dh = g_discIDext; // Disc data must already be in memory prior to calling this function
 	
 	int fd;
 	int ret;
@@ -264,7 +266,7 @@ s32 SYSTEMHL_writeSMState()
 	else {
 		dbgprint("\nWill write BS2 state: Eject disc.\n");
 		state.type = TYPE_EJECTDISC;
-		state.flags = FLAGS_FLAG1 | FLAGS_FLAG3 ;
+		state.flags = FLAGS_FLAG1 | FLAGS_FLAG3 ; //OSReturnToMenu
 		state.discstate = DISCSTATE_OPEN;
 	}
 	
@@ -291,6 +293,7 @@ s32 SYSTEMHL_writeSMState()
 	dbgprint("Write OK..");
 	return 0;
 }
+
 
 /* Different philosophies:
 * IOS_Open is a call to the IOS to get a specific system resource.
@@ -464,9 +467,9 @@ s32 SYSTEMHL_testNandAccess(u32 *buf,u32 size)
 */
 
 
- u32 SYSTEMHL_initDisc()
+ s32 SYSTEMHL_initDisc()
 {
-	u32 query_attempts = 0;
+	s32 query_attempts = 0;
 	DI_Mount();
 	while (DI_GetStatus() & (DVD_INIT | DVD_NO_DISC)) 
 	{
@@ -476,8 +479,10 @@ s32 SYSTEMHL_testNandAccess(u32 *buf,u32 size)
 		else
 			sleep(2);
 	}
-	dvdDriveReady = (query_attempts>8) ? false : true;	// Very ugly
-	return 0;
+	if (query_attempts>8)
+		return DVD_NO_DISC;
+	else
+		return 0;
 }
 
 /* s32 SYSTEMHL_checkDVDViaDI()
@@ -491,25 +496,25 @@ s32 SYSTEMHL_checkDVDViaDI()
 	// Therefore I am moving the call as the first thing in SYSTEMHL_Init();
 	// DI_Init();
 	//
-	SYSTEMHL_initDisc();
-	if( !dvdDriveReady ) return -1;
-	
-	memset(&read_buffer,0,BUFFER_SIZE);
-	
-	if (DI_ReadDVD(read_buffer, 1, 0)) return -4;
-    DISC_HEADER *header = (DISC_HEADER *)read_buffer;
-	
-	DI_Close();
-	dvdDriveReady = false;
-	DI_Reset();
-	
-    if ( ( header->magic_wii == MAGIC_WII ) || ( header->magic_gc == MAGIC_GC ) ) // There should always be at least one match for a legit game disc
+	if( !SYSTEMHL_initDisc() )
 	{
-		header->title[63] = '\0'; // Enforces string termination
-		return 0;
+		memset(&read_buffer,0,BUFFER_SIZE);
+	
+		if (DI_ReadDVD(read_buffer, 1, 0)) return DVD_ERROR_FATAL;
+		discheader_ext *header = (discheader_ext *)read_buffer;
+	
+		DI_Close();
+		DI_Reset();
+		u32 magic = (header->magic_wii | header->magic_gc);
+		if ( ( magic == MAGIC_WII ) || ( magic == MAGIC_GC ) ) // There should always be at least one match for a legit game disc
+			header->title[63] = '\0'; // Enforces string termination
+		else
+			return DVD_NO_DISC;
 	}
 	else
-		return -100; //Err: Invalid Data?
+		return DVD_NO_DISC;
+	
+	return 0;
 }
 
 const u8* getDataBuf()
@@ -542,11 +547,28 @@ s32 SYSTEMHL_dumpMemToSDFile(void)
 		return -1;
 	}
 	
-	fwrite((const void*)0x80000000,1,6144,fp);
+	fwrite((const void*)0x80000000,1024,1024,fp);
 	fclose(fp);
 	
 	fatUnmount(0);
 	return 0;
+}
+
+void SYSTEMHL_bootGCDisc(void)
+{
+	copyHeader_e2s( g_discID, (discheader_ext*)getDataBuf() );
+	
+	// This address range is related to: PI - Processor Interface (Interrupt Interface)
+	// It's most likely a Hardware Register into the PPC, its usage being specific to the Wii (undocumented use in GameCube)
+	// Source: YAGCD (Yet Another GameCube Documentation), section 5.4
+	*(volatile unsigned int *)0xCC003024 |= 7;	// I don't know what this does.
+	
+	CheckESRetval(ES_GetTicketViews(BC, &gcviews, 1));
+	CheckESRetval(ES_LaunchTitle(BC, &gcviews));
+	
+	printf("\nHalting Execution.. (Boot failed?)");
+	VIDEO_WaitVSync();
+	CheckWIIRetval(WII_EINTERNAL);
 }
 ////////////////////////////////////////
 

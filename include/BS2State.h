@@ -21,7 +21,8 @@
 // BS2SetStateFlags => FLAG1 | FLAG5 | (sometimes FLAG2)
 #define FLAGS_STARTWIIGAME 0xC1
 #define FLAGS_STARTGCGAME 0x82
-#define FLAGS_UNK 0x84   // set to 0x84 or 0xC4 by OSReturnToMenu
+#define FLAGS_UNK_1 0x84   // set to 0x84 or 0xC4 by OSReturnToMenu
+#define FLAGS_UNK_2 0xC4
 #define DISCSTATE_WII 1
 #define DISCSTATE_GC 2
 #define DISCSTATE_OPEN 3  // "cover open"?

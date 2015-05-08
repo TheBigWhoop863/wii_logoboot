@@ -7,10 +7,12 @@
 #include <unistd.h>
 #include <string.h>
 
+#include <di/di.h>
 #include <wiiuse/wpad.h>
 
 #include "systemhl.h"
 #include "rethandle.h"
+#include "disc.h"
 
 
 //---------------------------------------------------------------------------------
@@ -42,7 +44,6 @@ int main(int argc, char **argv)
 	IOSInfo *inf = SYSTEMHL_queryIOS();
 	printf("  Using IOS %d (Rev. %d)\n",inf->ver,inf->rev);
 	printf("  Flag HW_AHBPROT is:  ");
-	
 	if (HAVE_AHBPROT) // Is HW_AHBPROT set? See systemhl.h, thanks to FTPii project for this useful bit of code!
 		printf("SET!!");
 	else
@@ -50,7 +51,7 @@ int main(int argc, char **argv)
 	printf("\n\n");
 
 //-------------------------------------------------------------------------------------
-	
+	/*
 	printf("Accessing NAND via IPC/IOS call...");
 	if( !SYSTEMHL_readSMState() )
 	{
@@ -61,6 +62,7 @@ int main(int argc, char **argv)
 		printf(" --> Disc state is: %d\n", state.discstate);
 		printf("\n");
 	}
+	*/
 	
 	/*
 	printf("Accessing NAND via ISFS call...");
@@ -95,74 +97,46 @@ int main(int argc, char **argv)
 * STATUS: 2015-04-11 libdi works!
 * Jacopo Viti - Mar.2015
 ***************************************************/
-	const DISC_HEADER *header = (DISC_HEADER *)getDataBuf();
-	printf("Now reading disc info from DVD drive (libdi)...");
-	s32 retcode = SYSTEMHL_checkDVDViaDI();
-	if( !retcode )
+	u32 magic = 0;
+	const discheader_ext* header = (discheader_ext *)getDataBuf();
+	printf("Now reading disc info from DVD drive (libdi)...\n");
+	s32 DVDstate = SYSTEMHL_checkDVDViaDI();
+	if (DVDstate == 0)
 	{
-		printf("OK!\n");
 		printf("Data Read From Disc Header: \n");
-			printf(" --> Disc ID    : %c %c%c %c\n", (char)header->game_code_ext[0],(char)header->game_code_ext[1],(char)header->game_code_ext[2],(char)header->game_code_ext[3]);
-			printf(" --> Maker Code : %c%c\n", (char)header->maker_code[0], (char)header->maker_code[1]);
-			printf(" --> Disc Nr    : %d\n",header->disc_nr);
-			printf(" --> Disc Ver   : %d\n",header->disc_version);
-			printf(" --> Audio Strm : %d\n",header->audio_streaming);
-			printf(" --> Strm BufSz : %d\n",header->streaming_buffer_size);
-			
-				u32 magic = 0;
-				magic |= header->magic_wii;
-				magic |= header->magic_gc;
-			printf(" --> Magic Word : %08X", magic);
-				if( magic == (u32)MAGIC_WII )
-					printf("   (WII)");
-				if( magic == (u32)MAGIC_GC )
-					printf("   (GameCube)");
-				printf("\n");
-			
-			printf(" --> Game Title: %s\n",(char *)header->title);		
+		printf(" --> Disc ID    : %c %c%c %c\n", (char)header->game_code_ext[0],(char)header->game_code_ext[1],(char)header->game_code_ext[2],(char)header->game_code_ext[3]);
+		printf(" --> Maker Code : %c%c\n", (char)header->maker_code[0], (char)header->maker_code[1]);
+		printf(" --> Disc Nr    : %d\n",header->disc_nr);
+		printf(" --> Disc Ver   : %d\n",header->disc_version);
+		printf(" --> Audio Strm : %d\n",header->audio_streaming);
+		printf(" --> Strm BufSz : %d\n",header->streaming_buffer_size);
+			magic |= header->magic_wii;
+			magic |= header->magic_gc;
+		printf(" --> Magic Word : %08X", magic);
+			if( magic == (u32)MAGIC_WII )
+				printf("   (WII)");
+			if( magic == (u32)MAGIC_GC )
+				printf("   (GameCube)");
+			printf("\n");
+		
+		printf(" --> Game Title: %s\n",(char *)header->title);		
+	}
+	else if (DVDstate == DVD_NO_DISC)
+	{
+		printf("No Disc in drive. Exiting to SYSMENU...");
+		WPAD_Shutdown();
+		sleep(3); 
+		SYS_ResetSystem(SYS_RETURNTOMENU, 0, 0);
 	}
 	else
-		printf("Error: %d\n",retcode);
+		CheckDVDRetval( DVDstate );
 	
 //-------------------------------------------------------------------------------------
 
-
-	printf("Press A to proceed with next tests...\n");
-	SYSTEMHL_waitForButtonAPress();
-	
-	SYSTEMHL_ClearScreen();
-	
-	if(!SYSTEMHL_dumpMemToSDFile())
-		printf("Succeeded dumping memory to SD file. Analyse it! ;-)\n");
-	else
-		printf("Failed dumping memory to SD file.. :-(\n");
-	
-	printf("\n");
-	
-	printf("Will now copy header into special memory location..");
-	SYSTEMHL_waitForButtonAPress();
-	memcpy((u32*)INMEM_DVD_BI2,(const u32*)header,sizeof(DISC_HEADER));
-	
-	printf("\nWill attempt to write state.dol. ");
-	SYSTEMHL_waitForButtonAPress();
-	
-	if( !SYSTEMHL_writeSMState() )
-	{
-		printf("\nSuccessfully updated state.dat!\n");
-		if( !SYSTEMHL_readSMState() )
-		{
-			printf(" --> Flags set are: %#02x\n",state.flags);
-			printf(" --> Type set is: %d\n", state.type);
-			printf(" --> Disc state is: %d\n", state.discstate);
-			printf("\n");
-		}
-	}
-			
-			
-			
+	if (magic == (u32)MAGIC_GC)
+		printf("Press B to attempt autoboot of GC disc\n");
 			
 	printf("Press A to return to HBC; HOME to return to System Menu.\n");
-	//SYSTEMHL_waitForButtonAPress();
 	
 	while(1)
 	{
@@ -185,7 +159,10 @@ int main(int argc, char **argv)
 			//Should return to loader, but in Priiloader v0.8 beta returns to HBC instead..
 			exit(0);
 		}
-		
+		if ( (magic == (u32)MAGIC_GC) && ((pressed_wii & WPAD_BUTTON_B) | (pressed_wii & WPAD_CLASSIC_BUTTON_B) | (pressed_gc & PAD_BUTTON_B)) )
+		{
+			SYSTEMHL_bootGCDisc();
+		}
 		VIDEO_WaitVSync();
 	}
 	
