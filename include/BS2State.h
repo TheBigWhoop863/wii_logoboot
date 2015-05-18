@@ -33,6 +33,6 @@ typedef struct {
 	u8 discstate;
 	u8 returnto;
 	u32 unknown[6];
-} StateFlags;
+} BS2State;
 
 #endif

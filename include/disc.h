@@ -6,16 +6,15 @@
 #define MAGIC_GC  0xC2339F3D
 
 typedef struct {
-//    u8 disc_id;
-//    u8 game_code[2];
-//    u8 region_code;
-	u8 game_code_ext[4];
+	u8 game_code_ext[4];  //u8 disc_id;
+						  //u8 game_code[2];
+						  //u8 region_code;
     u8 maker_code[2];
     u8 disc_nr;
     u8 disc_version;
     u8 audio_streaming;
     u8 streaming_buffer_size;
-    u8 unused[14];
+    u8 unused[0x0e];
     u32 magic_wii;
     u32 magic_gc;
     u8 title[64];
@@ -41,8 +40,10 @@ typedef struct {
 extern discheader_ext* g_discIDext;
 extern discheader_short* g_discID;
 
+//Disc functions
 s32 copyHeader_e2e(discheader_ext* dst, const discheader_ext* src);
 s32 copyHeader_e2s(discheader_short* dst, const discheader_ext* src);
 s32 copyHeader_s2s(discheader_short* dst, const discheader_short* src);
 
+s32 readDiscHeader();
 #endif

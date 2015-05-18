@@ -14,49 +14,39 @@
 #include <fat.h>
 #include <sys/dirent.h>
 
-#include <gccore.h>
 
 // Wii stuff
+#include <gccore.h>
+#include <ogcsys.h>
+#include <ogc/lwp_watchdog.h>
 #include <ogc/es.h>
 #include <ogc/isfs.h>
 #include <ogc/ipc.h>
 #include <ogc/ios.h>
-//#include <ogc/dvd.h>
+#include <ogc/dvd.h>
 #include <ogc/wiilaunch.h>
 #include <di/di.h>
 #include <wiiuse/wpad.h>
-
-//#include <ogcsys.h>
-//#include <ogc/lwp_watchdog.h>
+#include <wiilight.h>
 
 #include "systemhl.h"
 #include "rethandle.h"
 #include "disc.h"
 
 static char __statefile[] ATTRIBUTE_ALIGN(32) = "/title/00000001/00000002/data/state.dat";
-static tikview gcviews ATTRIBUTE_ALIGN(32);
+static tikview __gcviews ATTRIBUTE_ALIGN(32);
 
-//static DvdDriveInfo driveinfo ATTRIBUTE_ALIGN(32);
-static IOSInfo iosinfo ATTRIBUTE_ALIGN(32);
-StateFlags state ATTRIBUTE_ALIGN(32);
+static IOSInfo __iosinfo ATTRIBUTE_ALIGN(32);
+BS2State g_BS2State ATTRIBUTE_ALIGN(32);
+static u32 __sysState = 0;
 
-static void *xfb = NULL;
-static GXRModeObj *rmode = NULL;
+void *xfb = NULL;
+GXRModeObj *rmode = NULL;
 
-static u32 __SYSTEMHL_init = 0;
-static bool dvdDriveReady = false;
 
-static u8 read_buffer[BUFFER_SIZE];
-// Debug printf function
-static inline void dbgprint(const char *text)
-{
-	#ifdef _DEBUG
-	if(__SYSTEMHL_init)
-		printf(text);
-	#endif
-	return;
-}
-
+/********************************************
+* Static functions
+********************************************/
 // Hidden functions, copied from wiilaunch.c
 // These are not accessible from outside wiilaunch.c (static), hence copy/paste
 static u32 __CalcChecksum(u32 *buf, int len)
@@ -84,7 +74,25 @@ static int __ValidChecksum(void *buf, int len)
 	u32 *p = (u32*)buf;
 	return p[0] == __CalcChecksum(p, len);
 }
+//-------------------------------------------------------
 
+
+
+
+// Debug printf function
+// TODO: Restructure to use vprintf, easier to pass args
+inline void dbgprint(const char *format)
+{
+	#ifdef _DEBUG
+	if( SYSTEMHL_querySysState(STATE_CONSOLE_INIT) )
+		printf(format);
+	#endif
+}
+
+inline u32 SYSTEMHL_querySysState(u32 state)
+{
+	return (__sysState & state); 
+}
 
 void SYSTEMHL_init()
 {
@@ -92,72 +100,80 @@ void SYSTEMHL_init()
 	// Subsystems APIs provided by libOGC
 	
 	// One exception is the DriveInterface API (libdi)
-	// It MUST be called as the very first thing.
+	// It MUST be init'ed as the very first thing.
+	if ( !SYSTEMHL_querySysState(STATE_DVD_INIT) )
+	{
+		CheckIOSRetval( DI_Init() );
+		__sysState |= STATE_DVD_INIT;
+	}
 	
-	int statusDIinit = -1;
-	statusDIinit = DI_Init();
-	// WARNING: If a disc is never inserted at this point, program might crash at the end (?). Known libdi bug.
+	if ( !SYSTEMHL_querySysState(STATE_VIDEO_INIT) )
+	{
+		VIDEO_Init();
+		__sysState |= STATE_VIDEO_INIT;
+	}
 	
-	VIDEO_Init();
-	AUDIO_Init(NULL);
+	if( !SYSTEMHL_querySysState(STATE_AUDIO_INIT) )
+	{
+		AUDIO_Init(NULL);
+		__sysState |= STATE_AUDIO_INIT;
+	}
 	
-	// Start WiiMote support
-	WPAD_Init();
-	
-	// Start GC Pad support
-	PAD_Init();
-	
-	// Obtain the preferred video mode from the system
-	// This will correspond to the settings in the Wii menu
-	rmode = VIDEO_GetPreferredMode(NULL);
+	if ( !SYSTEMHL_querySysState(STATE_PAD_INIT) )
+	{
+		WPAD_Init(); // Start WiiMote support
+		PAD_Init();  // Start GC Pad support
 
-	// Allocate memory for the display in the uncached region
-	xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
+		__sysState |= STATE_PAD_INIT;
+	}
 	
-	// Initialise the console, required for printf
-	console_init(xfb,20,20,rmode->fbWidth,rmode->xfbHeight,rmode->fbWidth*VI_DISPLAY_PIX_SZ);
-	
-	// Set up the video registers with the chosen mode
-	VIDEO_Configure(rmode);
-	
-	// Tell the video hardware where our display memory is
-	VIDEO_SetNextFramebuffer(xfb);
-	
-	// Make the display visible
-	VIDEO_SetBlack(FALSE);
+	if( !SYSTEMHL_querySysState(STATE_WIILIGHT_INIT) )
+	{
+		WIILIGHT_Init();
+		__sysState |= STATE_WIILIGHT_INIT;
+	}
 
-	// Flush the video register changes to the hardware
-	VIDEO_Flush();
-
-	// Wait for Video setup to complete
-	VIDEO_WaitVSync();
-	if(rmode->viTVMode&VI_NON_INTERLACE) VIDEO_WaitVSync();
 	
-	__SYSTEMHL_init=1;
-	
-	if(statusDIinit!=0)
-		dbgprint("WARNING: There probably was a problem while performing DI_Init()\n");
+	if( !SYSTEMHL_querySysState(STATE_CONSOLE_INIT) )
+	{
+		// Obtain the preferred video mode from the system
+		// This will correspond to the settings in the Wii menu
+		rmode = VIDEO_GetPreferredMode(NULL);
 
+		// Allocate memory for the display in the uncached region
+		xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
+		
+		// Initialise the console, required for printf
+		console_init(xfb,20,20,rmode->fbWidth,rmode->xfbHeight,rmode->fbWidth*VI_DISPLAY_PIX_SZ);
+		
+		// Set up the video registers with the chosen mode
+		VIDEO_Configure(rmode);
+		
+		// Tell the video hardware where our display memory is
+		VIDEO_SetNextFramebuffer(xfb);
+		
+		// Make the display visible
+		VIDEO_SetBlack(FALSE);
+
+		// Flush the video register changes to the hardware
+		VIDEO_Flush();
+
+		// Wait for Video setup to complete
+		VIDEO_WaitVSync();
+		if(rmode->viTVMode&VI_NON_INTERLACE)
+			VIDEO_WaitVSync();
+		
+		__sysState |= STATE_CONSOLE_INIT;
+	}
 }
 
-void* SYSTEMHL_getFramebuffer()
-{
-	return xfb;
-}
 
-GXRModeObj* SYSTEMHL_getVideoMode()
-{
-	return rmode;
-}
-
-void SYSTEMHL_setVideo(void* fb, GXRModeObj* mode)
-{
-	xfb=fb;
-	rmode=mode;
-}
 
 void SYSTEMHL_ClearScreen()
 {
+	if( !( SYSTEMHL_querySysState(STATE_CONSOLE_INIT) ) )
+		return;
+	
 	VIDEO_WaitVSync();
 	console_init(xfb,20,20,rmode->fbWidth,rmode->xfbHeight,rmode->fbWidth*VI_DISPLAY_PIX_SZ);
 	VIDEO_Configure(rmode);
@@ -177,6 +193,9 @@ void SYSTEMHL_ClearScreen()
 */
 void SYSTEMHL_waitForButtonAPress()
 {
+	if( !SYSTEMHL_querySysState(STATE_PAD_INIT) )
+		return;
+	
 	u16 A_pressed = 0;
 	dbgprint("Press A to continue..");
 	while(!A_pressed)
@@ -206,41 +225,125 @@ void SYSTEMHL_waitForButtonAPress()
 		VIDEO_WaitVSync();
 	}
 }
-/* SYSTEMHL_readSMState()
+
+
+s32 SYSTEMHL_checkDVDViaDI()
+{
+	return readDiscHeader();
+}
+
+
+/* SYSTEMHL_readBF2State()
 *
 * This replicates a lower level function in wiilaunch (part of libOGC :) )
 * Flags are read from special files in the NAND filesystem
 * and put in a global struct.
 */
-s32 SYSTEMHL_readSMState()
+s32 SYSTEMHL_readBF2State()
 {
-	/* This function is copy/pasted from wiilaunch.c (part of libOGC)
-	* It refreshes data in one global struct, which can then be accessed.
-	*/
+	// This function is copy/pasted from wiilaunch.c (part of libOGC)
+	// It refreshes data in one global struct, which can then be accessed.
 	
 	int fd;
 	int ret;
-
+		
 	fd = IOS_Open(__statefile,IPC_OPEN_READ);
 	if(fd < 0) {
-		memset(&state,0,sizeof(state));
+		memset(&g_BS2State,0,sizeof(BS2State));
 		return WII_EINTERNAL;
 	}
-
-	ret = IOS_Read(fd, &state, sizeof(state));
+	ret = IOS_Read(fd, &g_BS2State, sizeof(BS2State));
 	IOS_Close(fd);
-	if(ret != sizeof(state)) {
-		memset(&state,0,sizeof(state));
+	if(ret != sizeof(BS2State)) {
+		memset(&g_BS2State,0,sizeof(BS2State));
 		return WII_EINTERNAL;
 	}
-	if(!__ValidChecksum(&state, sizeof(state))) {
-		memset(&state,0,sizeof(state));
+	if(!__ValidChecksum(&g_BS2State, sizeof(BS2State))) {
+		memset(&g_BS2State,0,sizeof(BS2State));
 		return WII_ECHECKSUM;
 	}
 	return 0;
 }
 
-s32 SYSTEMHL_writeSMState()
+
+
+
+const IOSInfo* SYSTEMHL_queryIOS()
+{
+	memset(&__iosinfo,0,sizeof(__iosinfo));
+	__iosinfo.ver = CheckIOSRetval( IOS_GetVersion() );
+	__iosinfo.rev = CheckIOSRetval( IOS_GetRevision() );
+	return &__iosinfo;
+}
+
+
+
+s32 SYSTEMHL_dumpMemToSDFile()
+{
+	if(!fatInitDefault())
+	{
+		dbgprint("Cannot initialize SD Card !!\n");
+		fatUnmount(0);
+		return -1;
+	}
+	DIR *root = opendir("sd:/");
+	if(!root)
+	{
+		dbgprint("Cannot OPEN SD Card !!\n");
+		fatUnmount(0);
+		return -1;
+	}
+	closedir(root);
+	
+	FILE *fp = fopen("sd:/memdump.bin","wb");
+	if (fp == NULL)
+	{
+		dbgprint("Cannot open file for writing.\n");
+		fatUnmount(0);
+		return -1;
+	}
+	
+	fwrite((const void*)0x80000000,1024,1024,fp);
+	fclose(fp);
+	
+	fatUnmount(0);
+	return 0;
+}
+
+
+void SYSTEMHL_bootGCDisc()
+{
+	copyHeader_e2s( g_discID, (discheader_ext*)g_discIDext );
+	
+	// This address range is related to: PI - Processor Interface (Interrupt Interface)
+	// It's most likely a Hardware Register into the PPC, its usage being specific to the Wii (undocumented use in GameCube)
+	// Source: YAGCD (Yet Another GameCube Documentation), section 5.4
+	*(volatile unsigned int *)0xCC003024 |= 7;	// I don't know what this does.
+	
+	CheckESRetval(ES_GetTicketViews(BC, &__gcviews, 1));
+	CheckESRetval(ES_LaunchTitle(BC, &__gcviews));
+	
+	printf("\nHalting Execution.. (Boot failed?)");
+	VIDEO_WaitVSync();
+	CheckWIIRetval(WII_EINTERNAL);
+}
+
+
+
+void SYSTEMHL_exitToSysMenu()
+{
+	WPAD_Shutdown();
+	__sysState &= !STATE_PAD_INIT;
+	usleep(500); 
+	SYS_ResetSystem(SYS_RETURNTOMENU, 0, 0);
+}
+
+void SYSTEMHL_exitToLoader()
+{
+	exit(0);
+}
+/*
+s32 SYSTEMHL_writeBF2State()
 {
 	const volatile discheader_ext* dh = g_discIDext; // Disc data must already be in memory prior to calling this function
 	
@@ -282,8 +385,7 @@ s32 SYSTEMHL_writeSMState()
 	if(fd < 0)
 		return WII_EINTERNAL;
 	
-	dbgprint("Opened file..");
-	SYSTEMHL_waitForButtonAPress();	
+	dbgprint("Opened file..");	
 
 	ret = IOS_Write(fd, &state, sizeof(state));
 	IOS_Close(fd);
@@ -293,282 +395,6 @@ s32 SYSTEMHL_writeSMState()
 	dbgprint("Write OK..");
 	return 0;
 }
-
-
-/* Different philosophies:
-* IOS_Open is a call to the IOS to get a specific system resource.
-* Call is notified to IOS using using IPC (InterProcess Communication);
-* this is the official, correct way to do stuff. IOS restrictions may apply.
-*
-* IOS_Open works for different resources: can be a file on NAND, can be a device (/dev), etc.
-* It is possible to use an IOS_Open call to get access to the DVD drive, for example : IOS_Open("/dev/di",...);
-* For this reason, IOS_Read exist, but not IOS_Write (some resources might not be writable).
-* 
-* ISFS calls, on the other hand, still use IPC, but everything is specific to the NAND filesystem.
-* You MUST use ISFS calls (or raw ioctls opcodes :) ) if you need to write to the NAND filesystem.
 */
-/*
-s32 SYSTEMHL_readStateViaISFS()
-{
-	// Quick retcodes compendium (to be rewritten! Debug only!!)
-	// 1: cannot Init
-	// 2: Cannot Mount
-	// 3: Cannot open file (path invalid??) or other file err.
-	
-	int fd;
-	int ret;
-	
-	memset(&stateflags,0xBB,sizeof(stateflags)); // TODO: Remove
-
-	if (ISFS_Initialize() != IPC_OK) 
-	{
-		ISFS_Deinitialize();
-		return 1;
-	}
-	
-	fd = ISFS_Open(__stateflags,ISFS_OPEN_READ);
-	if(fd < 0) {
-		//memset(&stateflags,0,sizeof(stateflags));
-		//return WII_EINTERNAL;
-		return 2;
-	}
-
-	ret = ISFS_Read(fd, &stateflags, sizeof(stateflags));
-	ISFS_Close(fd);
-	if(ret != sizeof(stateflags)) {
-		//memset(&stateflags,0,sizeof(stateflags));
-		//return WII_EINTERNAL;
-		return 3;
-	}
-	if(!__ValidChecksum(&stateflags, sizeof(stateflags))) {
-		//memset(&stateflags,0,sizeof(stateflags));
-		return WII_ECHECKSUM;
-	}
-	
-	ISFS_Deinitialize();
-	
-	return 0;
-}
-*/
-/*
-StateFlags* SYSTEMHL_getStateFlags()
-{
-	return &stateflags;
-}
-*/
-/*
-DvdDriveInfo* SYSTEMHL_getDVDInfo()
-{
-	return &driveinfo;
-}
-*/
-IOSInfo* SYSTEMHL_queryIOS()
-{
-	memset(&iosinfo,0,sizeof(iosinfo));
-	iosinfo.ver = IOS_GetVersion();
-	iosinfo.rev = IOS_GetRevision();
-	return &iosinfo;
-}
-
-/*
-s32 SYSTEMHL_testNandAccess(u32 *buf,u32 size)
-{
-	//u32 buf[512]; // Data buffer , 2K size
-	
-	printf("Entering SYSTEMHL_TestNandAccess(u32 *,u32)\n");
-		SYSTEMHL_waitForButtonAPress();
-
-	int fd;
-	s32 ret;
-	
-	memset(&buf,0xBE,size); // Fill the buffer
-	
-	// Init ISFS subsystem
-	printf("Now Initializing ISFS..");
-		SYSTEMHL_waitForButtonAPress();
-
-	if (ISFS_Initialize() != IPC_OK) 
-	{
-		ISFS_Deinitialize();
-		return 1;
-	}
-	printf("OK!\n");
-	
-	
-	// Create target file
-	printf("Creating file..");
-		SYSTEMHL_waitForButtonAPress();
-		
-	ret = ISFS_CreateFile(__testfile,0,3,3,3);
-	if (ret!=0)
-	{
-		ISFS_Deinitialize();
-		return ret;
-	}
-	printf("OK!\n");	
-	
-	// Write into file
-	printf("Writing file..");
-		SYSTEMHL_waitForButtonAPress();
-		
-	fd = ISFS_Open(__testfile,ISFS_OPEN_WRITE);
-	if(fd < 0) 
-		return WII_EINTERNAL;
-	
-	ret = ISFS_Write(fd,buf,size);
-	if (ret!=0)
-	{
-		ISFS_Deinitialize();
-		return -101;
-	}
-	printf("OK!\n");
-	
-	// Close file, read file (verify)	
-	printf("Reopening file..");
-		SYSTEMHL_waitForButtonAPress();
-		
-	ISFS_Close(fd);
-	fd = 0;
-	memset(&buf,0,size);
-	
-	fd = ISFS_Open(__testfile,ISFS_OPEN_READ);
-	if(fd < 0) 
-	{
-		ISFS_Deinitialize();	
-		return WII_EINTERNAL;
-	}
-	printf("OK!\n");
-	printf("Read file..");
-		SYSTEMHL_waitForButtonAPress();
-		
-	ret = ISFS_Read(fd,buf,size);
-	if (ret!=0)
-	{	
-		ISFS_Deinitialize();
-		return -102;
-	}
-	
-	printf("OK!\n");
-	
-	printf("Finishing SYSTEMHL_testNandAccess()..");
-		SYSTEMHL_waitForButtonAPress();
-		
-	ISFS_Close(fd);
-	fd = 0;
-	
-	// Delete file
-	ISFS_Delete(__testfile);
-	
-	ISFS_Deinitialize();
-	
-	printf("OK!\n");
-	return 0;
-}
-*/
-
-
- s32 SYSTEMHL_initDisc()
-{
-	s32 query_attempts = 0;
-	DI_Mount();
-	while (DI_GetStatus() & (DVD_INIT | DVD_NO_DISC)) 
-	{
-		query_attempts++;
-		if (query_attempts>8)
-			break;
-		else
-			sleep(2);
-	}
-	if (query_attempts>8)
-		return DVD_NO_DISC;
-	else
-		return 0;
-}
-
-/* s32 SYSTEMHL_checkDVDViaDI()
-* 
-* Uses the DriveInterface (libdi) functions to access and issue commands to DVD Drive
-* See if those work better than DVD functions, which don't seem to be able to access the drive
-*/
-s32 SYSTEMHL_checkDVDViaDI()
-{
-	// As per the README of libdi, DI_Init() MUST be called as the very first thing in my program!
-	// Therefore I am moving the call as the first thing in SYSTEMHL_Init();
-	// DI_Init();
-	//
-	if( !SYSTEMHL_initDisc() )
-	{
-		memset(&read_buffer,0,BUFFER_SIZE);
-	
-		if (DI_ReadDVD(read_buffer, 1, 0)) return DVD_ERROR_FATAL;
-		discheader_ext *header = (discheader_ext *)read_buffer;
-	
-		DI_Close();
-		DI_Reset();
-		u32 magic = (header->magic_wii | header->magic_gc);
-		if ( ( magic == MAGIC_WII ) || ( magic == MAGIC_GC ) ) // There should always be at least one match for a legit game disc
-			header->title[63] = '\0'; // Enforces string termination
-		else
-			return DVD_NO_DISC;
-	}
-	else
-		return DVD_NO_DISC;
-	
-	return 0;
-}
-
-const u8* getDataBuf()
-{
-	return read_buffer;
-}
-
-s32 SYSTEMHL_dumpMemToSDFile(void)
-{
-	if(!fatInitDefault())
-	{
-		dbgprint("Cannot initialize SD Card !!\n");
-		fatUnmount(0);
-		return -1;
-	}
-	DIR *root = opendir("sd:/");
-	if(!root)
-	{
-		dbgprint("Cannot OPEN SD Card !!\n");
-		fatUnmount(0);
-		return -1;
-	}
-	closedir(root);
-	
-	FILE *fp = fopen("sd:/memdump.bin","wb");
-	if (fp == NULL)
-	{
-		dbgprint("Cannot open file for writing.\n");
-		fatUnmount(0);
-		return -1;
-	}
-	
-	fwrite((const void*)0x80000000,1024,1024,fp);
-	fclose(fp);
-	
-	fatUnmount(0);
-	return 0;
-}
-
-void SYSTEMHL_bootGCDisc(void)
-{
-	copyHeader_e2s( g_discID, (discheader_ext*)getDataBuf() );
-	
-	// This address range is related to: PI - Processor Interface (Interrupt Interface)
-	// It's most likely a Hardware Register into the PPC, its usage being specific to the Wii (undocumented use in GameCube)
-	// Source: YAGCD (Yet Another GameCube Documentation), section 5.4
-	*(volatile unsigned int *)0xCC003024 |= 7;	// I don't know what this does.
-	
-	CheckESRetval(ES_GetTicketViews(BC, &gcviews, 1));
-	CheckESRetval(ES_LaunchTitle(BC, &gcviews));
-	
-	printf("\nHalting Execution.. (Boot failed?)");
-	VIDEO_WaitVSync();
-	CheckWIIRetval(WII_EINTERNAL);
-}
-////////////////////////////////////////
+////////////////////////////////////////////////////////
 
